@@ -1,0 +1,27 @@
+From: y2k38-abi
+Subject: [PATCH] rs6000/linux: define __Y2K38_ABI__ builtin macro (optional)
+
+This is a SKETCH for ELDK-era GCC. It does not change time_t.
+It only injects preprocessor defines so application code can
+detect the toolchain flavor that ships y2k38 headers in sysroot.
+
+Apply only if you rebuild ELDK GCC; preferred approach is still
+sysroot headers + -specs without patching GCC.
+
+---
+ gcc/config/rs6000/linux.h | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/gcc/config/rs6000/linux.h b/gcc/config/rs6000/linux.h
+index 0000000..1111111 100644
+--- a/gcc/config/rs6000/linux.h
++++ b/gcc/config/rs6000/linux.h
+@@ -/* existing LINUX_TARGET_OS_CPP_BUILTINS block — conceptual append */-
++#ifndef __Y2K38_ABI_TOOLCHAIN_SKETCH__
++#define __Y2K38_ABI_TOOLCHAIN_SKETCH__
++/* In a real patch, extend TARGET_OS_CPP_BUILTINS():
++ *   builtin_define ("__Y2K38_ABI__=1");
++ *   builtin_define_std ("__SIZEOF_Y2K38_TIME_T__=8");
++ * Prefer installing headers under $sysroot/usr/include/y2k38 instead.
++ */
++#endif

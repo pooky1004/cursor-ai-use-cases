@@ -1,0 +1,16 @@
+# GCC specs fragment — add Y2K38 include/lib search paths for ELDK.
+# Install to e.g. /opt/eldk/usr/lib/gcc-specs/y2k38.specs
+# Use:  ppc_82xx-gcc -specs=/opt/eldk/usr/lib/gcc-specs/y2k38.specs ...
+#
+# Edit the absolute paths to match your sysroot install of liby2k38safe.
+
+*cpp_unique_options:
++ -isystem /opt/eldk/ppc_82xx/usr/include
+
+*link:
++ -L/opt/eldk/ppc_82xx/usr/lib
+
+# Optional: always pull the safe time library into dynamically linked apps
+# Uncomment only if every binary in this flavor must link it:
+# *lib:
+# + -ly2k38safe
