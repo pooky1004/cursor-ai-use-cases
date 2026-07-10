@@ -11,6 +11,8 @@
 #include <sys/time.h>
 #include <time.h>
 
+#include <pthread.h>
+
 #include <y2k38/time.h>
 
 static y2k38_time_t g_kernel_offset;
@@ -19,14 +21,149 @@ static y2k38_time_t g_mock_now;
 static int g_mock_kernel_enabled;
 static int32_t g_mock_kernel_sec;
 
+/* Long-running daemon: auto-detect signed 32-bit kernel wrap */
+static int g_auto_wrap;
+static char g_auto_wrap_persist[256];
+static y2k38_time_t g_last_kernel_raw;
+static int g_have_last_raw;
+static unsigned g_wrap_count;
+static y2k38_wrap_callback_fn g_wrap_cb;
+static void *g_wrap_cb_user;
+static pthread_mutex_t g_clk_mu = PTHREAD_MUTEX_INITIALIZER;
+
+#define Y2K38_WRAP_JUMP_MIN  ((y2k38_time_t)2147483648LL) /* 2^31 — suspicious backward jump */
+
+static y2k38_time_t read_kernel_sec_raw(void);
+
 void y2k38_clock_set_kernel_offset(y2k38_time_t offset)
 {
+    pthread_mutex_lock(&g_clk_mu);
     g_kernel_offset = offset;
+    pthread_mutex_unlock(&g_clk_mu);
 }
 
 y2k38_time_t y2k38_clock_get_kernel_offset(void)
 {
-    return g_kernel_offset;
+    y2k38_time_t off;
+    pthread_mutex_lock(&g_clk_mu);
+    off = g_kernel_offset;
+    pthread_mutex_unlock(&g_clk_mu);
+    return off;
+}
+
+void y2k38_clock_set_auto_wrap(int enabled, const char *persist_path)
+{
+    pthread_mutex_lock(&g_clk_mu);
+    g_auto_wrap = enabled ? 1 : 0;
+    g_auto_wrap_persist[0] = '\0';
+    if (enabled && persist_path && persist_path[0]) {
+        snprintf(g_auto_wrap_persist, sizeof(g_auto_wrap_persist),
+                 "%s", persist_path);
+    }
+    if (!enabled) {
+        g_have_last_raw = 0;
+    }
+    pthread_mutex_unlock(&g_clk_mu);
+}
+
+int y2k38_clock_get_auto_wrap(void)
+{
+    int v;
+    pthread_mutex_lock(&g_clk_mu);
+    v = g_auto_wrap;
+    pthread_mutex_unlock(&g_clk_mu);
+    return v;
+}
+
+unsigned y2k38_clock_get_wrap_count(void)
+{
+    unsigned n;
+    pthread_mutex_lock(&g_clk_mu);
+    n = g_wrap_count;
+    pthread_mutex_unlock(&g_clk_mu);
+    return n;
+}
+
+void y2k38_clock_on_wrap_callback(y2k38_wrap_callback_fn fn, void *userdata)
+{
+    pthread_mutex_lock(&g_clk_mu);
+    g_wrap_cb = fn;
+    g_wrap_cb_user = userdata;
+    pthread_mutex_unlock(&g_clk_mu);
+}
+
+/*
+ * Detect classic signed 32-bit overflow: raw jumps from large positive
+ * (near INT32_MAX) to negative while real time moves forward.
+ */
+static int detect_and_apply_wrap_locked(y2k38_time_t raw)
+{
+    y2k38_time_t jump;
+    y2k38_wrap_callback_fn cb;
+    void *cb_user;
+    char persist[256];
+
+    if (!g_auto_wrap || g_mock_enabled)
+        return 0;
+
+    if (!g_have_last_raw) {
+        g_last_kernel_raw = raw;
+        g_have_last_raw = 1;
+        return 0;
+    }
+
+    if (raw >= g_last_kernel_raw) {
+        g_last_kernel_raw = raw;
+        return 0;
+    }
+
+    jump = g_last_kernel_raw - raw;
+    if (jump < Y2K38_WRAP_JUMP_MIN)
+        return 0;
+
+    /* One full unsigned 32-bit revolution of the kernel second counter. */
+    g_kernel_offset += y2k38_clock_u32_wrap_offset(1);
+    g_wrap_count += 1;
+    g_last_kernel_raw = raw;
+
+    persist[0] = '\0';
+    if (g_auto_wrap_persist[0])
+        snprintf(persist, sizeof(persist), "%s", g_auto_wrap_persist);
+
+    cb = g_wrap_cb;
+    cb_user = g_wrap_cb_user;
+
+    if (persist[0])
+        y2k38_clock_save_offset_file(persist, g_kernel_offset);
+
+    if (cb)
+        cb(g_kernel_offset, g_wrap_count, cb_user);
+
+    return 1;
+}
+
+int y2k38_clock_poll_wrap(void)
+{
+    y2k38_time_t raw;
+    int hit;
+
+    if (g_mock_enabled)
+        return 0;
+
+    pthread_mutex_lock(&g_clk_mu);
+    raw = read_kernel_sec_raw();
+    hit = detect_and_apply_wrap_locked(raw);
+    pthread_mutex_unlock(&g_clk_mu);
+    return hit;
+}
+
+static y2k38_time_t read_and_track_raw(void)
+{
+    y2k38_time_t raw;
+
+    raw = read_kernel_sec_raw();
+    detect_and_apply_wrap_locked(raw);
+    return raw;
 }
 
 void y2k38_clock_set_mock(int enabled, y2k38_time_t mock_now)
@@ -85,11 +222,20 @@ y2k38_time_t y2k38_time_kernel_raw(y2k38_time_t *tloc)
 y2k38_time_t y2k38_time(y2k38_time_t *tloc)
 {
     y2k38_time_t now;
+    y2k38_time_t raw;
+    y2k38_time_t off;
 
-    if (g_mock_enabled)
+    pthread_mutex_lock(&g_clk_mu);
+
+    if (g_mock_enabled) {
         now = g_mock_now;
-    else
-        now = apply_offset(read_kernel_sec_raw());
+    } else {
+        raw = read_and_track_raw();
+        off = g_kernel_offset;
+        now = raw + off;
+    }
+
+    pthread_mutex_unlock(&g_clk_mu);
 
     if (tloc)
         *tloc = now;
@@ -119,10 +265,18 @@ int y2k38_gettimeofday(struct y2k38_timeval *tv)
         return 0;
     }
 
-    if (gettimeofday(&host, NULL) != 0)
+    pthread_mutex_lock(&g_clk_mu);
+    if (gettimeofday(&host, NULL) != 0) {
+        pthread_mutex_unlock(&g_clk_mu);
         return -1;
+    }
+    {
+        y2k38_time_t raw = (y2k38_time_t)host.tv_sec;
+        detect_and_apply_wrap_locked(raw);
+        tv->tv_sec = raw + g_kernel_offset;
+    }
+    pthread_mutex_unlock(&g_clk_mu);
 
-    tv->tv_sec = apply_offset((y2k38_time_t)host.tv_sec);
     tv->tv_usec = (y2k38_suseconds_t)host.tv_usec;
     tv->__pad = 0;
     return 0;
@@ -341,4 +495,61 @@ int y2k38_fprint_epoch(FILE *fp, y2k38_time_t t)
 int y2k38_is_past_time_t32_max(y2k38_time_t t)
 {
     return t > Y2K38_TIME_T32_MAX;
+}
+
+static y2k38_time_t g_sleep_max_chunk = 3600;
+
+void y2k38_sleep_set_max_chunk(y2k38_time_t max_sec)
+{
+    if (max_sec > 0)
+        g_sleep_max_chunk = max_sec;
+}
+
+y2k38_time_t y2k38_sleep_get_max_chunk(void)
+{
+    return g_sleep_max_chunk;
+}
+
+int y2k38_nsleep_relative(y2k38_time_t sec, long nsec)
+{
+    struct timespec req;
+    struct timespec rem;
+
+    if (sec < 0 || nsec < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    while (nsec >= 1000000000L) {
+        sec += 1;
+        nsec -= 1000000000L;
+    }
+
+    req.tv_sec = (time_t)sec;
+    req.tv_nsec = nsec;
+
+    while (nanosleep(&req, &rem) != 0) {
+        if (errno != EINTR)
+            return -1;
+        req = rem;
+    }
+    return 0;
+}
+
+int y2k38_sleep_until(y2k38_time_t wake_utc)
+{
+    y2k38_time_t now;
+    y2k38_time_t rem;
+
+    for (;;) {
+        now = y2k38_time(NULL);
+        rem = y2k38_difftime_sec(wake_utc, now);
+        if (rem <= 0)
+            return 0;
+
+        if (rem > g_sleep_max_chunk)
+            rem = g_sleep_max_chunk;
+
+        if (y2k38_nsleep_relative(rem, 0) != 0)
+            return -1;
+    }
 }

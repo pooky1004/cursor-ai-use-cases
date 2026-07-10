@@ -55,7 +55,9 @@ LIB_OBJS  := $(LIB_SRCS:.c=.o)
 DEMO_BINS := examples/broken/y2k38_broken \
              examples/broken/broken_daemon_pipeline \
              examples/fixed/y2k38_fixed \
-             examples/fixed/kernel_offset_demo
+             examples/fixed/kernel_offset_demo \
+             examples/fixed/y2k38_threads_demo \
+             examples/fixed/y2k38_autowrap_demo
 
 DAEMON_BINS := daemons/daemon_a/daemon_a \
                daemons/daemon_b/daemon_b
@@ -97,6 +99,12 @@ examples/fixed/y2k38_fixed: examples/fixed/y2k38_fixed.c $(LIBDIR)/liby2k38safe.
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $< $(Y2K38_LIB) $(LDFLAGS) $(LIBS)
 
 examples/fixed/kernel_offset_demo: examples/fixed/kernel_offset_demo.c $(LIBDIR)/liby2k38safe.a
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $< $(Y2K38_LIB) $(LDFLAGS) $(LIBS)
+
+examples/fixed/y2k38_threads_demo: examples/fixed/y2k38_threads_demo.c $(LIBDIR)/liby2k38safe.a
+	$(CC) $(CPPFLAGS) $(CFLAGS) -pthread -o $@ $< $(Y2K38_LIB) $(LDFLAGS) $(LIBS) -pthread
+
+examples/fixed/y2k38_autowrap_demo: examples/fixed/y2k38_autowrap_demo.c $(LIBDIR)/liby2k38safe.a
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $< $(Y2K38_LIB) $(LDFLAGS) $(LIBS)
 
 daemons: $(DAEMON_BINS)

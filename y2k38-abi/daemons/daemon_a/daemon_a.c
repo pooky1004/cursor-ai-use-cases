@@ -10,6 +10,7 @@
  *   --mock-kernel SEC         emulate signed 32-bit kernel second
  *   --offset-file PATH        load kernel offset (default: env or /etc/y2k38_offset)
  *   --no-offset-file          do not auto-load offset file
+ *   --auto-wrap               detect kernel 32-bit wrap at runtime; persist OFFSET
  *
  * Without --once: runs until SIGTERM/SIGINT, appending a sample event every
  * few seconds, and also accepts lines on stdin:
@@ -43,7 +44,8 @@ static void usage(const char *argv0)
 {
     fprintf(stderr,
             "Usage: %s <logfile> [--once] [--mock-now EPOCH] "
-            "[--mock-kernel SEC] [--offset-file PATH|--no-offset-file]\n",
+            "[--mock-kernel SEC] [--offset-file PATH|--no-offset-file] "
+            "[--auto-wrap]\n",
             argv0);
 }
 
@@ -135,6 +137,7 @@ int main(int argc, char **argv)
     const char *offset_file = NULL;
     int once = 0;
     int no_offset = 0;
+    int auto_wrap = 0;
     int i;
     FILE *fp;
     y2k38_time_t mock = 0;
@@ -147,6 +150,8 @@ int main(int argc, char **argv)
             once = 1;
         } else if (strcmp(argv[i], "--no-offset-file") == 0) {
             no_offset = 1;
+        } else if (strcmp(argv[i], "--auto-wrap") == 0) {
+            auto_wrap = 1;
         } else if (strcmp(argv[i], "--offset-file") == 0 && i + 1 < argc) {
             offset_file = argv[++i];
         } else if (strcmp(argv[i], "--mock-now") == 0 && i + 1 < argc) {
@@ -176,6 +181,14 @@ int main(int argc, char **argv)
 
     if (apply_startup_offset(offset_file, no_offset) != 0)
         return 1;
+
+    if (auto_wrap) {
+        const char *persist = offset_file;
+        if (!persist || no_offset)
+            persist = Y2K38_OFFSET_PATH_DEFAULT;
+        y2k38_clock_set_auto_wrap(1, persist);
+        fprintf(stderr, "daemon_a: auto-wrap enabled persist=%s\n", persist);
+    }
 
     if (have_mock_k)
         y2k38_clock_set_mock_kernel(1, mock_k);

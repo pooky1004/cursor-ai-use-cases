@@ -66,6 +66,29 @@ int y2k38_clock_save_offset_file(const char *path, y2k38_time_t offset);
  */
 int y2k38_clock_apply_offset_default(const char *path_or_null);
 
+/*
+ * Automatic wrap recovery for long-running daemons (started pre-2038, runs past).
+ *
+ * On each y2k38_time() / y2k38_gettimeofday(), if kernel raw seconds jump
+ * backward by ~2^32 (signed 32-bit overflow), OFFSET is increased by 2^32.
+ *
+ * persist_path: if non-NULL, save updated OFFSET to this file on each wrap.
+ * Pass Y2K38_OFFSET_PATH_DEFAULT or NULL to skip persistence.
+ *
+ * Also call y2k38_clock_on_wrap_callback() to log/notify your daemon.
+ */
+void y2k38_clock_set_auto_wrap(int enabled, const char *persist_path);
+int y2k38_clock_get_auto_wrap(void);
+unsigned y2k38_clock_get_wrap_count(void);
+
+typedef void (*y2k38_wrap_callback_fn)(y2k38_time_t new_offset,
+                                       unsigned wrap_count,
+                                       void *userdata);
+void y2k38_clock_on_wrap_callback(y2k38_wrap_callback_fn fn, void *userdata);
+
+/* Force re-check (e.g. from SIGALRM timer thread). Returns 1 if wrap handled. */
+int y2k38_clock_poll_wrap(void);
+
 /* Test/demo: force absolute "now" (bypasses kernel + offset). */
 void y2k38_clock_set_mock(int enabled, y2k38_time_t mock_now);
 
@@ -107,6 +130,27 @@ int y2k38_fprint_epoch(FILE *fp, y2k38_time_t t);
 
 /* Detect if a (possibly narrowed) 32-bit value is past the signed max. */
 int y2k38_is_past_time_t32_max(y2k38_time_t t);
+
+/* ---- relative wait (Y2K38-safe; do not use absolute time_t timers) ----- */
+
+/*
+ * Sleep for a relative interval using nanosleep(2). Unaffected by 32-bit
+ * time_t overflow because no absolute wall-clock endpoint is passed to libc.
+ */
+int y2k38_nsleep_relative(y2k38_time_t sec, long nsec);
+
+/*
+ * Block until wake_utc (y2k38_time_t). Implemented as a loop of relative
+ * nanosleep chunks vs y2k38_time() — safe when now is pre-2038 and wake_utc
+ * is post-2038. Returns 0 when wake time reached, -1 on error.
+ */
+int y2k38_sleep_until(y2k38_time_t wake_utc);
+
+/*
+ * Max seconds per single nanosleep chunk inside y2k38_sleep_until (default 3600).
+ */
+void y2k38_sleep_set_max_chunk(y2k38_time_t max_sec);
+y2k38_time_t y2k38_sleep_get_max_chunk(void);
 
 #ifdef __cplusplus
 }
