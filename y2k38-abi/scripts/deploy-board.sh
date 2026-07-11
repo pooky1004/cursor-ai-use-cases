@@ -51,7 +51,8 @@ else
 fi
 
 echo "==> on board, set post-2038 time or calibrate if kernel clock is wrapped:"
-echo "  y2k38_offsetctl set-time <true_utc_epoch> --file /etc/y2k38_offset --notify"
+echo "  y2k38_offsetctl set-time YYYY-MM-DD:hh:mm:ss --file /etc/y2k38_offset --notify"
+echo "  y2k38_offsetctl get-time"
 echo "  y2k38_offsetctl calibrate <true_utc_epoch> --file /etc/y2k38_offset --notify"
 echo "  y2k38_offsetctl show"
 echo "==> done"

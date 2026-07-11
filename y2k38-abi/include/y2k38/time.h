@@ -150,6 +150,12 @@ y2k38_time_t y2k38_timegm(const struct y2k38_tm *tm);
 int y2k38_format_epoch(y2k38_time_t t, char *buf, size_t buflen);
 int y2k38_format_iso8601_utc(y2k38_time_t t, char *buf, size_t buflen);
 
+/*
+ * CLI format used by y2k38_offsetctl: YYYY-MM-DD:hh:mm:ss (UTC).
+ */
+int y2k38_format_datetime_ctl(y2k38_time_t t, char *buf, size_t buflen);
+int y2k38_parse_datetime_ctl(const char *s, y2k38_time_t *out);
+
 /* Parse signed decimal epoch seconds (full 64-bit). Returns 0 on success. */
 int y2k38_parse_epoch(const char *s, y2k38_time_t *out);
 

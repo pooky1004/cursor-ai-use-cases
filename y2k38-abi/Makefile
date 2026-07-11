@@ -133,6 +133,8 @@ check-offset: examples/fixed/kernel_offset_demo tools/y2k38_offsetctl
 		--mock-kernel -2147483548
 	./tools/y2k38_offsetctl set 4294967296 --file /tmp/y2k38_off2.conf --notify
 	./tools/y2k38_offsetctl sync --file /tmp/y2k38_off2.conf
+	@test "$$(./tools/y2k38_offsetctl get-time --file /tmp/y2k38_off.conf \
+		--mock-kernel -2147483548)" = "2038-01-19:03:15:48"
 
 scripts/abi_check: scripts/abi_check.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $< $(LDFLAGS)

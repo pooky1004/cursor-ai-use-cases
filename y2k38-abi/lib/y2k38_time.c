@@ -550,6 +550,61 @@ int y2k38_parse_epoch(const char *s, y2k38_time_t *out)
     return 0;
 }
 
+int y2k38_format_datetime_ctl(y2k38_time_t t, char *buf, size_t buflen)
+{
+    struct y2k38_tm tm;
+    int n;
+
+    if (!buf || buflen < 20) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (y2k38_gmtime_r(&t, &tm) != 0)
+        return -1;
+    n = snprintf(buf, buflen, "%04d-%02d-%02d:%02d:%02d:%02d",
+                 tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+                 tm.tm_hour, tm.tm_min, tm.tm_sec);
+    if (n < 0 || (size_t)n >= buflen)
+        return -1;
+    return n;
+}
+
+int y2k38_parse_datetime_ctl(const char *s, y2k38_time_t *out)
+{
+    struct y2k38_tm tm;
+    int y, mo, d, h, mi, sec;
+    int n;
+    y2k38_time_t epoch;
+
+    if (!s || !out) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    memset(&tm, 0, sizeof(tm));
+    n = sscanf(s, "%d-%d-%d:%d:%d:%d", &y, &mo, &d, &h, &mi, &sec);
+    if (n != 6)
+        return -1;
+
+    if (y < 1970 || mo < 1 || mo > 12 || d < 1 || d > 31)
+        return -1;
+    if (h < 0 || h > 23 || mi < 0 || mi > 59 || sec < 0 || sec > 59)
+        return -1;
+
+    tm.tm_year = y - 1900;
+    tm.tm_mon = mo - 1;
+    tm.tm_mday = d;
+    tm.tm_hour = h;
+    tm.tm_min = mi;
+    tm.tm_sec = sec;
+
+    epoch = y2k38_timegm(&tm);
+    if (epoch < 0)
+        return -1;
+    *out = epoch;
+    return 0;
+}
+
 int y2k38_fprint_epoch(FILE *fp, y2k38_time_t t)
 {
     return fprintf(fp, "%lld", (long long)t);

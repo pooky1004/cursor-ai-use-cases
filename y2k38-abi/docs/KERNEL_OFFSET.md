@@ -62,8 +62,9 @@ it does not assume the wrap model.
 **Set post-2038 wall clock** (scenario E — sets kernel + OFFSET file):
 
 ```bash
-# root required: settimeofday(2) or date(1) + /etc/y2k38_offset
-y2k38_offsetctl set-time 2147483748 --file /etc/y2k38_offset --notify
+# root required: calendar UTC + /etc/y2k38_offset
+y2k38_offsetctl set-time 2038-01-19:03:15:48 --file /etc/y2k38_offset --notify
+y2k38_offsetctl get-time
 y2k38_offsetctl show
 ```
 
