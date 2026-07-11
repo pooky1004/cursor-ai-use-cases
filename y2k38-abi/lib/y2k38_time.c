@@ -1,6 +1,7 @@
 /*
  * liby2k38safe — time backend for 32-bit time_t platforms (ELDK/PPC).
  */
+#define _DEFAULT_SOURCE
 #define _POSIX_C_SOURCE 200112L
 
 #include <errno.h>
@@ -14,6 +15,9 @@
 #include <pthread.h>
 
 #include <y2k38/time.h>
+
+/* From y2k38_offset.c — shared /etc/y2k38_offset mtime reload. */
+int y2k38_clock_shared_offset_poll(void);
 
 static y2k38_time_t g_kernel_offset;
 static int g_mock_enabled;
@@ -34,6 +38,60 @@ static pthread_mutex_t g_clk_mu = PTHREAD_MUTEX_INITIALIZER;
 #define Y2K38_WRAP_JUMP_MIN  ((y2k38_time_t)2147483648LL) /* 2^31 — suspicious backward jump */
 
 static y2k38_time_t read_kernel_sec_raw(void);
+
+static int set_system_via_date_cmd(int32_t ksec)
+{
+    char cmd[96];
+    int rc;
+
+    snprintf(cmd, sizeof(cmd), "date -s @%lld 2>/dev/null",
+             (long long)(y2k38_time_t)ksec);
+    rc = system(cmd);
+    if (rc == 0)
+        return 0;
+
+    snprintf(cmd, sizeof(cmd), "date -u -s @%lld",
+             (long long)(y2k38_time_t)ksec);
+    rc = system(cmd);
+    return (rc == 0) ? 0 : -1;
+}
+
+int y2k38_clock_set_system_utc(y2k38_time_t true_utc)
+{
+    int32_t ksec;
+    struct timeval tv;
+    y2k38_time_t raw;
+    y2k38_time_t offset;
+
+    g_mock_enabled = 0;
+    g_mock_kernel_enabled = 0;
+
+    ksec = y2k38_clock_kernel_sec_for_utc(true_utc);
+    tv.tv_sec = (time_t)ksec;
+    tv.tv_usec = 0;
+
+    if (settimeofday(&tv, NULL) != 0) {
+        if (set_system_via_date_cmd(ksec) != 0)
+            return -1;
+    }
+
+    /* Optional: sync RTC when hwclock exists (best-effort). */
+    if (system("hwclock -w 2>/dev/null") != 0) {
+        /* ignore */
+    }
+
+    raw = (y2k38_time_t)ksec;
+    offset = y2k38_clock_compute_offset(true_utc, raw);
+
+    pthread_mutex_lock(&g_clk_mu);
+    g_kernel_offset = offset;
+    g_have_last_raw = 0;
+    g_last_kernel_raw = raw;
+    g_have_last_raw = 1;
+    pthread_mutex_unlock(&g_clk_mu);
+
+    return 0;
+}
 
 void y2k38_clock_set_kernel_offset(y2k38_time_t offset)
 {
@@ -225,6 +283,9 @@ y2k38_time_t y2k38_time(y2k38_time_t *tloc)
     y2k38_time_t raw;
     y2k38_time_t off;
 
+    if (!g_mock_enabled)
+        (void)y2k38_clock_shared_offset_poll();
+
     pthread_mutex_lock(&g_clk_mu);
 
     if (g_mock_enabled) {
@@ -257,6 +318,8 @@ int y2k38_gettimeofday(struct y2k38_timeval *tv)
         tv->__pad = 0;
         return 0;
     }
+
+    (void)y2k38_clock_shared_offset_poll();
 
     if (g_mock_kernel_enabled) {
         tv->tv_sec = apply_offset((y2k38_time_t)g_mock_kernel_sec);

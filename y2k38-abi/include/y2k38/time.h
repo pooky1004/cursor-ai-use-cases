@@ -67,6 +67,37 @@ int y2k38_clock_save_offset_file(const char *path, y2k38_time_t offset);
 int y2k38_clock_apply_offset_default(const char *path_or_null);
 
 /*
+ * Resolve offset file path: cli arg, getenv(Y2K38_OFFSET_ENV), or default.
+ */
+const char *y2k38_clock_resolve_offset_path(const char *path_or_null);
+
+/*
+ * Force reload OFFSET from file into the current process.
+ * path_or_null uses the same resolution as apply_offset_default.
+ */
+int y2k38_clock_reload_offset_default(const char *path_or_null);
+
+/*
+ * 32-bit kernel second for settimeofday(2) when the real UTC is true_utc.
+ * Post-2038 targets use the signed low-32 residue (wrap-safe).
+ */
+int32_t y2k38_clock_kernel_sec_for_utc(y2k38_time_t true_utc);
+
+/*
+ * Set the Linux system clock via settimeofday(2) (with date(1) fallback) to
+ * the int32 kernel residue of true_utc, then apply OFFSET in-process.
+ * Does not write the offset file.
+ */
+int y2k38_clock_set_system_utc(y2k38_time_t true_utc);
+
+/*
+ * set_system_utc + save OFFSET file + register shared reload for other threads
+ * in this process. Use after y2k38_offsetctl set-time / calibrate on the board.
+ */
+int y2k38_clock_set_system_and_offset(y2k38_time_t true_utc,
+                                      const char *path_or_null);
+
+/*
  * Automatic wrap recovery for long-running daemons (started pre-2038, runs past).
  *
  * On each y2k38_time() / y2k38_gettimeofday(), if kernel raw seconds jump

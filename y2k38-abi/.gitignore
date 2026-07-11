@@ -1,0 +1,17 @@
+*.log
+/tmp/
+/staging/
+demo_y2k38_offset.conf
+y2k38-abi-*.tar.gz
+*.o
+*.a
+*.so
+*.so.*
+/examples/broken/y2k38_broken
+/examples/broken/broken_daemon_pipeline
+/examples/fixed/y2k38_fixed
+/examples/fixed/kernel_offset_demo
+/daemons/daemon_a/daemon_a
+/daemons/daemon_b/daemon_b
+/tools/y2k38_offsetctl
+/scripts/abi_check

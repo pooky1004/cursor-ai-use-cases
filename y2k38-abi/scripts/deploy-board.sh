@@ -50,7 +50,8 @@ else
     scp -r "$STAGE/usr" "$STAGE/etc" "$remote"
 fi
 
-echo "==> on board, calibrate if kernel clock is wrapped:"
-echo "  y2k38_offsetctl calibrate <true_utc_epoch> --file /etc/y2k38_offset"
+echo "==> on board, set post-2038 time or calibrate if kernel clock is wrapped:"
+echo "  y2k38_offsetctl set-time <true_utc_epoch> --file /etc/y2k38_offset --notify"
+echo "  y2k38_offsetctl calibrate <true_utc_epoch> --file /etc/y2k38_offset --notify"
 echo "  y2k38_offsetctl show"
 echo "==> done"

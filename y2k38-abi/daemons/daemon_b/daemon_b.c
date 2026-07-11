@@ -29,11 +29,35 @@
 #include <y2k38/time.h>
 
 static volatile sig_atomic_t g_run = 1;
+static const char *g_offset_file;
 
 static void on_signal(int sig)
 {
     (void)sig;
     g_run = 0;
+}
+
+static void on_sighup(int sig)
+{
+    (void)sig;
+    if (g_offset_file && g_offset_file[0]) {
+        if (y2k38_clock_reload_offset_default(g_offset_file) == 0)
+            fprintf(stderr, "daemon_b: reloaded offset=%lld\n",
+                    (long long)y2k38_clock_get_kernel_offset());
+    }
+}
+
+static void store_offset_path(const char *offset_file, int no_offset)
+{
+    static char path_buf[512];
+
+    if (no_offset) {
+        g_offset_file = NULL;
+        return;
+    }
+    snprintf(path_buf, sizeof(path_buf), "%s",
+             y2k38_clock_resolve_offset_path(offset_file));
+    g_offset_file = path_buf;
 }
 
 static void usage(const char *argv0)
@@ -167,6 +191,9 @@ int main(int argc, char **argv)
     if (apply_startup_offset(offset_file, no_offset) != 0)
         return 1;
 
+    if (!no_offset)
+        store_offset_path(offset_file, no_offset);
+
     if (have_mock_k)
         y2k38_clock_set_mock_kernel(1, mock_k);
     if (have_mock)
@@ -174,6 +201,7 @@ int main(int argc, char **argv)
 
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
+    signal(SIGHUP, on_sighup);
 
     out = fopen(out_path, "w");
     if (!out) {

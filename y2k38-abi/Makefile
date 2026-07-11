@@ -126,9 +126,13 @@ check: scripts/abi_check
 check-offset: examples/fixed/kernel_offset_demo tools/y2k38_offsetctl
 	./examples/fixed/kernel_offset_demo
 	./tools/y2k38_offsetctl calibrate 2147483748 --file /tmp/y2k38_off.conf \
-		--mock-kernel -2147483548
+		--mock-kernel -2147483548 --notify
 	./tools/y2k38_offsetctl show --file /tmp/y2k38_off.conf \
 		--mock-kernel -2147483548
+	./tools/y2k38_offsetctl reload --file /tmp/y2k38_off.conf \
+		--mock-kernel -2147483548
+	./tools/y2k38_offsetctl set 4294967296 --file /tmp/y2k38_off2.conf --notify
+	./tools/y2k38_offsetctl sync --file /tmp/y2k38_off2.conf
 
 scripts/abi_check: scripts/abi_check.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $< $(LDFLAGS)

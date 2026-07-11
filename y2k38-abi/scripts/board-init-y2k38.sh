@@ -20,6 +20,7 @@ export Y2K38_KERNEL_OFFSET_FILE="$OFFSET_FILE"
 
 if [ -x /usr/bin/y2k38_offsetctl ]; then
     /usr/bin/y2k38_offsetctl show --file "$OFFSET_FILE" || true
+    /usr/bin/y2k38_offsetctl reload --file "$OFFSET_FILE" 2>/dev/null || true
 elif [ -f "$OFFSET_FILE" ]; then
     echo "y2k38: offset file present at $OFFSET_FILE"
 fi

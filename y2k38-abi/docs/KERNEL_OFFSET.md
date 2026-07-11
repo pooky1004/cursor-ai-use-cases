@@ -59,6 +59,19 @@ y2k38_offsetctl set-u32-wrap 1 --file /etc/y2k38_offset
 Prefer **calibrate** (scenario C) when a trusted absolute time is available —
 it does not assume the wrap model.
 
+**Set post-2038 wall clock** (scenario E — sets kernel + OFFSET file):
+
+```bash
+# root required: settimeofday(2) or date(1) + /etc/y2k38_offset
+y2k38_offsetctl set-time 2147483748 --file /etc/y2k38_offset --notify
+y2k38_offsetctl show
+```
+
+`set-time` writes the int32 kernel residue via `settimeofday`/`date`, saves
+`OFFSET = target - kernel_raw`, and optionally sends SIGHUP to daemons.
+All y2k38 processes sharing `/etc/y2k38_offset` reload on the next
+`y2k38_time()` (mtime poll) or on SIGHUP.
+
 ### C. Calibrate from trusted UTC (recommended on board)
 
 Trusted source examples: GPS UART, NTP on a gateway, staging host `date +%s`

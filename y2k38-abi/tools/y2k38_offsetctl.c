@@ -1,12 +1,16 @@
 /*
- * Board utility: inspect / set / calibrate y2k38 kernel clock offset.
+ * Board utility: inspect / set / calibrate / set-time for y2k38 kernel offset.
  *
  * Usage:
  *   y2k38_offsetctl show [--file PATH]
- *   y2k38_offsetctl set <offset> [--file PATH]
- *   y2k38_offsetctl set-u32-wrap <count> [--file PATH]
- *   y2k38_offsetctl calibrate <true_utc_epoch> [--file PATH]
- *       Uses current kernel raw time (or --mock-kernel SEC) to compute offset.
+ *   y2k38_offsetctl set <offset> [--file PATH] [--notify]
+ *   y2k38_offsetctl set-u32-wrap <count> [--file PATH] [--notify]
+ *   y2k38_offsetctl calibrate <true_utc_epoch> [--file PATH] [--notify]
+ *   y2k38_offsetctl set-time <true_utc_epoch> [--file PATH] [--notify]
+ *       Sets Linux system clock (settimeofday/date) to the int32 kernel
+ *       residue, saves OFFSET to /etc/y2k38_offset, notifies daemons.
+ *   y2k38_offsetctl reload [--file PATH]
+ *   y2k38_offsetctl sync [--file PATH] [--notify]
  *
  * Default file: /etc/y2k38_offset  (or $Y2K38_KERNEL_OFFSET_FILE)
  */
@@ -19,14 +23,7 @@
 
 static const char *resolve_path(const char *cli_path)
 {
-    const char *env;
-
-    if (cli_path && cli_path[0])
-        return cli_path;
-    env = getenv(Y2K38_OFFSET_ENV);
-    if (env && env[0])
-        return env;
-    return Y2K38_OFFSET_PATH_DEFAULT;
+    return y2k38_clock_resolve_offset_path(cli_path);
 }
 
 static void usage(const char *argv0)
@@ -34,11 +31,51 @@ static void usage(const char *argv0)
     fprintf(stderr,
             "Usage:\n"
             "  %s show [--file PATH]\n"
-            "  %s set <offset> [--file PATH]\n"
-            "  %s set-u32-wrap <count> [--file PATH]\n"
-            "  %s calibrate <true_utc_epoch> [--file PATH] "
-            "[--mock-kernel SEC]\n",
-            argv0, argv0, argv0, argv0);
+            "  %s set <offset> [--file PATH] [--notify]\n"
+            "  %s set-u32-wrap <count> [--file PATH] [--notify]\n"
+            "  %s calibrate <true_utc_epoch> [--file PATH] [--notify]\n"
+            "  %s set-time <true_utc_epoch> [--file PATH] [--notify]\n"
+            "      settimeofday/date + OFFSET file (post-2038 safe)\n"
+            "  %s reload [--file PATH]\n"
+            "  %s sync [--file PATH] [--notify]\n"
+            "  %s notify\n",
+            argv0, argv0, argv0, argv0, argv0, argv0, argv0, argv0);
+}
+
+static void run_shell_quiet(const char *cmd)
+{
+    int rc = system(cmd);
+    (void)rc;
+}
+
+static int notify_y2k38_processes(void)
+{
+    /*
+     * Daemons install SIGHUP → y2k38_clock_reload_offset_default().
+     * Other y2k38 apps pick up mtime changes on the next y2k38_time() call.
+     */
+    run_shell_quiet("killall -HUP daemon_a 2>/dev/null");
+    run_shell_quiet("killall -HUP daemon_b 2>/dev/null");
+    fprintf(stderr, "notified: SIGHUP sent to daemon_a/daemon_b (if running)\n");
+    return 0;
+}
+
+static int persist_offset(const char *path, y2k38_time_t offset, int notify)
+{
+    const char *p = resolve_path(path);
+
+    if (y2k38_clock_save_offset_file(p, offset) != 0) {
+        perror(p);
+        return 1;
+    }
+    y2k38_clock_set_kernel_offset(offset);
+    if (y2k38_clock_reload_offset_default(path) != 0) {
+        fprintf(stderr, "warn: saved but reload failed\n");
+    }
+    printf("wrote OFFSET %lld to %s\n", (long long)offset, p);
+    if (notify)
+        notify_y2k38_processes();
+    return 0;
 }
 
 static int cmd_show(const char *path)
@@ -69,20 +106,12 @@ static int cmd_show(const char *path)
     return 0;
 }
 
-static int cmd_set(const char *path, y2k38_time_t offset)
+static int cmd_set(const char *path, y2k38_time_t offset, int notify)
 {
-    const char *p = resolve_path(path);
-
-    if (y2k38_clock_save_offset_file(p, offset) != 0) {
-        perror(p);
-        return 1;
-    }
-    y2k38_clock_set_kernel_offset(offset);
-    printf("wrote OFFSET %lld to %s\n", (long long)offset, p);
-    return 0;
+    return persist_offset(path, offset, notify);
 }
 
-static int cmd_calibrate(const char *path, y2k38_time_t true_utc)
+static int cmd_calibrate(const char *path, y2k38_time_t true_utc, int notify)
 {
     y2k38_time_t raw;
     y2k38_time_t offset;
@@ -92,7 +121,71 @@ static int cmd_calibrate(const char *path, y2k38_time_t true_utc)
     printf("true_utc   = %lld\n", (long long)true_utc);
     printf("kernel_raw = %lld\n", (long long)raw);
     printf("offset     = %lld\n", (long long)offset);
-    return cmd_set(path, offset);
+    return persist_offset(path, offset, notify);
+}
+
+static int cmd_set_time(const char *path, y2k38_time_t true_utc, int notify)
+{
+    int32_t ksec;
+    y2k38_time_t raw;
+    y2k38_time_t offset;
+    y2k38_time_t recovered;
+    char iso[64];
+    const char *p = resolve_path(path);
+
+    ksec = y2k38_clock_kernel_sec_for_utc(true_utc);
+    printf("target_utc  = %lld\n", (long long)true_utc);
+    printf("kernel_set  = %ld (int32 residue for settimeofday/date)\n",
+           (long)ksec);
+
+    if (y2k38_clock_set_system_and_offset(true_utc, path) != 0) {
+        perror("set-time");
+        fprintf(stderr,
+                "hint: run as root; needs settimeofday(2) or date(1)\n");
+        return 1;
+    }
+
+    raw = y2k38_time_kernel_raw(NULL);
+    offset = y2k38_clock_get_kernel_offset();
+    recovered = y2k38_time(NULL);
+    y2k38_format_iso8601_utc(recovered, iso, sizeof(iso));
+
+    printf("kernel_raw  = %lld\n", (long long)raw);
+    printf("offset      = %lld\n", (long long)offset);
+    printf("recovered   = %lld (%s)\n", (long long)recovered, iso);
+    printf("saved       = %s\n", p);
+
+    if (recovered != true_utc) {
+        fprintf(stderr,
+                "WARN: recovered %lld != target %lld\n",
+                (long long)recovered, (long long)true_utc);
+    }
+
+    if (notify)
+        notify_y2k38_processes();
+    return (recovered == true_utc) ? 0 : 1;
+}
+
+static int cmd_reload(const char *path)
+{
+    const char *p = resolve_path(path);
+
+    if (y2k38_clock_reload_offset_default(path) != 0) {
+        perror(p);
+        return 1;
+    }
+    printf("reloaded OFFSET %lld from %s\n",
+           (long long)y2k38_clock_get_kernel_offset(), p);
+    return 0;
+}
+
+static int cmd_sync(const char *path, int notify)
+{
+    if (cmd_reload(path) != 0)
+        return 1;
+    if (notify)
+        notify_y2k38_processes();
+    return 0;
 }
 
 int main(int argc, char **argv)
@@ -102,6 +195,7 @@ int main(int argc, char **argv)
     int i;
     int32_t mock_k = 0;
     int have_mock_k = 0;
+    int notify = 0;
 
     if (argc < 2) {
         usage(argv[0]);
@@ -115,6 +209,8 @@ int main(int argc, char **argv)
         } else if (strcmp(argv[i], "--mock-kernel") == 0 && i + 1 < argc) {
             mock_k = (int32_t)strtoll(argv[++i], NULL, 10);
             have_mock_k = 1;
+        } else if (strcmp(argv[i], "--notify") == 0) {
+            notify = 1;
         }
     }
 
@@ -124,13 +220,22 @@ int main(int argc, char **argv)
     if (strcmp(cmd, "show") == 0)
         return cmd_show(file);
 
+    if (strcmp(cmd, "notify") == 0)
+        return notify_y2k38_processes();
+
+    if (strcmp(cmd, "reload") == 0)
+        return cmd_reload(file);
+
+    if (strcmp(cmd, "sync") == 0)
+        return cmd_sync(file, notify);
+
     if (strcmp(cmd, "set") == 0) {
         y2k38_time_t off;
         if (argc < 3 || y2k38_parse_epoch(argv[2], &off) != 0) {
             usage(argv[0]);
             return 1;
         }
-        return cmd_set(file, off);
+        return cmd_set(file, off, notify);
     }
 
     if (strcmp(cmd, "set-u32-wrap") == 0) {
@@ -140,7 +245,7 @@ int main(int argc, char **argv)
             return 1;
         }
         n = (unsigned)strtoul(argv[2], NULL, 10);
-        return cmd_set(file, y2k38_clock_u32_wrap_offset(n));
+        return cmd_set(file, y2k38_clock_u32_wrap_offset(n), notify);
     }
 
     if (strcmp(cmd, "calibrate") == 0) {
@@ -149,7 +254,21 @@ int main(int argc, char **argv)
             usage(argv[0]);
             return 1;
         }
-        return cmd_calibrate(file, truth);
+        return cmd_calibrate(file, truth, notify);
+    }
+
+    if (strcmp(cmd, "set-time") == 0) {
+        y2k38_time_t truth;
+        if (argc < 3 || y2k38_parse_epoch(argv[2], &truth) != 0) {
+            usage(argv[0]);
+            return 1;
+        }
+        if (have_mock_k) {
+            fprintf(stderr,
+                    "set-time: --mock-kernel not supported (needs real clock)\n");
+            return 1;
+        }
+        return cmd_set_time(file, truth, notify);
     }
 
     usage(argv[0]);
