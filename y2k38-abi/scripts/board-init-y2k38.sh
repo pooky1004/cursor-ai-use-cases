@@ -25,10 +25,16 @@ elif [ -f "$OFFSET_FILE" ]; then
     echo "y2k38: offset file present at $OFFSET_FILE"
 fi
 
+# Prefer starting the Check daemon first so wrap polls + SIGHUP list exist.
 if [ "${Y2K38_START_DAEMONS:-0}" = "1" ]; then
-    mkdir -p "$(dirname "$EVENT_LOG")" "$(dirname "$DELTA_OUT")"
+    mkdir -p "$(dirname "$EVENT_LOG")" "$(dirname "$DELTA_OUT")" \
+             "$(dirname "${Y2K38_SIGHUP_LIST_FILE:-/var/run/y2k38_sighup.list}")"
+    if [ -x /usr/bin/daemon_y2k38_check ]; then
+        /usr/bin/daemon_y2k38_check --offset-file "$OFFSET_FILE" &
+        echo "y2k38: daemon_y2k38_check pid $!"
+    fi
     if [ -x /usr/bin/daemon_a ]; then
-        /usr/bin/daemon_a "$EVENT_LOG" --offset-file "$OFFSET_FILE" &
+        /usr/bin/daemon_a "$EVENT_LOG" --offset-file "$OFFSET_FILE" --auto-wrap &
         echo "y2k38: daemon_a pid $!"
     fi
     if [ -x /usr/bin/daemon_b ]; then

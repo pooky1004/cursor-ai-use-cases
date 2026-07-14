@@ -49,7 +49,8 @@ endif
 
 LIB_SRCS  := $(LIBDIR)/y2k38_time.c \
              $(LIBDIR)/y2k38_eventlog.c \
-             $(LIBDIR)/y2k38_offset.c
+             $(LIBDIR)/y2k38_offset.c \
+             $(LIBDIR)/y2k38_session.c
 LIB_OBJS  := $(LIB_SRCS:.c=.o)
 
 DEMO_BINS := examples/broken/y2k38_broken \
@@ -60,7 +61,8 @@ DEMO_BINS := examples/broken/y2k38_broken \
              examples/fixed/y2k38_autowrap_demo
 
 DAEMON_BINS := daemons/daemon_a/daemon_a \
-               daemons/daemon_b/daemon_b
+               daemons/daemon_b/daemon_b \
+               daemons/daemon_y2k38_check/daemon_y2k38_check
 
 TOOL_BINS := tools/y2k38_offsetctl
 
@@ -110,9 +112,13 @@ examples/fixed/y2k38_autowrap_demo: examples/fixed/y2k38_autowrap_demo.c $(LIBDI
 daemons: $(DAEMON_BINS)
 
 daemons/daemon_a/daemon_a: daemons/daemon_a/daemon_a.c $(LIBDIR)/liby2k38safe.a
-	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $< $(Y2K38_LIB) $(LDFLAGS) $(LIBS)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -pthread -o $@ $< $(Y2K38_LIB) $(LDFLAGS) $(LIBS) -pthread
 
 daemons/daemon_b/daemon_b: daemons/daemon_b/daemon_b.c $(LIBDIR)/liby2k38safe.a
+	$(CC) $(CPPFLAGS) $(CFLAGS) -pthread -o $@ $< $(Y2K38_LIB) $(LDFLAGS) $(LIBS) -pthread
+
+daemons/daemon_y2k38_check/daemon_y2k38_check: \
+		daemons/daemon_y2k38_check/daemon_y2k38_check.c $(LIBDIR)/liby2k38safe.a
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $< $(Y2K38_LIB) $(LDFLAGS) $(LIBS)
 
 tools: $(TOOL_BINS)
@@ -124,7 +130,9 @@ check: scripts/abi_check
 	./scripts/abi_check
 
 check-offset: examples/fixed/kernel_offset_demo tools/y2k38_offsetctl
+	mkdir -p /tmp/y2k38_test
 	./examples/fixed/kernel_offset_demo
+	Y2K38_SIGHUP_LIST_FILE=/tmp/y2k38_test/sighup.list \
 	./tools/y2k38_offsetctl calibrate 2147483748 --file /tmp/y2k38_off.conf \
 		--mock-kernel -2147483548 --notify
 	./tools/y2k38_offsetctl show --file /tmp/y2k38_off.conf \
@@ -132,6 +140,7 @@ check-offset: examples/fixed/kernel_offset_demo tools/y2k38_offsetctl
 	./tools/y2k38_offsetctl reload --file /tmp/y2k38_off.conf \
 		--mock-kernel -2147483548
 	./tools/y2k38_offsetctl set 4294967296 --file /tmp/y2k38_off2.conf --notify
+	Y2K38_SIGHUP_LIST_FILE=/tmp/y2k38_test/sighup.list \
 	./tools/y2k38_offsetctl sync --file /tmp/y2k38_off2.conf
 	@test "$$(./tools/y2k38_offsetctl get-time --file /tmp/y2k38_off.conf \
 		--mock-kernel -2147483548)" = "2038-01-19:03:15:48"
@@ -169,6 +178,7 @@ install: lib
 	ln -sf liby2k38safe.so.1 $(DESTDIR)$(PREFIX)/lib/liby2k38safe.so
 	cp -a daemons/daemon_a/daemon_a $(DESTDIR)$(PREFIX)/bin/
 	cp -a daemons/daemon_b/daemon_b $(DESTDIR)$(PREFIX)/bin/
+	cp -a daemons/daemon_y2k38_check/daemon_y2k38_check $(DESTDIR)$(PREFIX)/bin/
 	cp -a tools/y2k38_offsetctl $(DESTDIR)$(PREFIX)/bin/
 	cp -a examples/fixed/y2k38_fixed $(DESTDIR)$(PREFIX)/bin/ 2>/dev/null || true
 	cp -a examples/fixed/kernel_offset_demo $(DESTDIR)$(PREFIX)/bin/ 2>/dev/null || true

@@ -56,6 +56,53 @@ the residual back toward correct UTC **when** that model matches the board.
 y2k38_offsetctl set-u32-wrap 1 --file /etc/y2k38_offset
 ```
 
+## Process session and SIGHUP list
+
+Every app that calls `y2k38_time()` automatically:
+
+1. Checks a process-local **ready flag** (`y2k38_session_is_ready()`).
+2. If not ready: registers SIGHUP, adds `<name> <pid>` to the SIGHUP list,
+   loads `/etc/y2k38_offset`, enables auto-wrap, sets the flag.
+3. On each `y2k38_time()`: detects kernel wrap and bumps OFFSET by `2^32`.
+
+On process exit (`y2k38_session_exit()` / `atexit`): remove from list, restore
+previous SIGHUP handler.
+
+| Path / env | Default |
+|------------|---------|
+| SIGHUP list | `/var/run/y2k38_sighup.list` (`Y2K38_SIGHUP_LIST_FILE`) |
+| Offset file | `/etc/y2k38_offset` (`Y2K38_KERNEL_OFFSET_FILE`) |
+
+List format:
+
+```
+# y2k38 SIGHUP subscriber list — name pid
+daemon_y2k38_check 1234
+daemon_a 1235
+daemon_b 1236
+```
+
+`y2k38_offsetctl set-time` / `sync` / `notify` and `daemon_y2k38_check` send
+SIGHUP to every pid in the list **except the sender**.
+
+### daemon_y2k38_check
+
+```bash
+daemon_y2k38_check --offset-file /etc/y2k38_offset
+```
+
+- Registers itself in the SIGHUP list
+- Adaptive poll: far from wrap → rare; near wrap → frequent
+- On wrap: update OFFSET file + SIGHUP peers (not self)
+- On SIGHUP: reload OFFSET
+
+### set-time (always notifies list)
+
+```bash
+y2k38_offsetctl set-time 2038-01-19:03:15:48 --file /etc/y2k38_offset
+y2k38_offsetctl sync --file /etc/y2k38_offset
+```
+
 Prefer **calibrate** (scenario C) when a trusted absolute time is available —
 it does not assume the wrap model.
 
@@ -63,15 +110,15 @@ it does not assume the wrap model.
 
 ```bash
 # root required: calendar UTC + /etc/y2k38_offset
-y2k38_offsetctl set-time 2038-01-19:03:15:48 --file /etc/y2k38_offset --notify
+y2k38_offsetctl set-time 2038-01-19:03:15:48 --file /etc/y2k38_offset
 y2k38_offsetctl get-time
 y2k38_offsetctl show
 ```
 
-`set-time` writes the int32 kernel residue via `settimeofday`/`date`, saves
-`OFFSET = target - kernel_raw`, and optionally sends SIGHUP to daemons.
-All y2k38 processes sharing `/etc/y2k38_offset` reload on the next
-`y2k38_time()` (mtime poll) or on SIGHUP.
+`set-time` writes the int32 kernel residue via `settimeofday`/`date`/`hwclock`,
+saves `OFFSET = target - kernel_raw`, and SIGHUPs the SIGHUP-list subscribers.
+All y2k38 processes sharing `/etc/y2k38_offset` reload on SIGHUP (or on the next
+`y2k38_time()` mtime poll).
 
 ### C. Calibrate from trusted UTC (recommended on board)
 

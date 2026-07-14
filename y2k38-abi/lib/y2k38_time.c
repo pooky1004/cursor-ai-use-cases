@@ -277,11 +277,27 @@ y2k38_time_t y2k38_time_kernel_raw(y2k38_time_t *tloc)
     return raw;
 }
 
+y2k38_time_t y2k38_clock_seconds_until_wrap(void)
+{
+    y2k38_time_t raw;
+
+    raw = y2k38_time_kernel_raw(NULL);
+    if (raw < 0)
+        return 0; /* already past signed wrap region */
+    if (raw >= Y2K38_TIME_T32_MAX)
+        return 0;
+    return Y2K38_TIME_T32_MAX - raw;
+}
+
 y2k38_time_t y2k38_time(y2k38_time_t *tloc)
 {
     y2k38_time_t now;
     y2k38_time_t raw;
     y2k38_time_t off;
+
+    /* Ensure offset applied (flag) + SIGHUP + list registration once. */
+    if (!g_mock_enabled)
+        (void)y2k38_session_ensure(NULL);
 
     if (!g_mock_enabled)
         (void)y2k38_clock_shared_offset_poll();
@@ -319,6 +335,7 @@ int y2k38_gettimeofday(struct y2k38_timeval *tv)
         return 0;
     }
 
+    (void)y2k38_session_ensure(NULL);
     (void)y2k38_clock_shared_offset_poll();
 
     if (g_mock_kernel_enabled) {

@@ -38,6 +38,15 @@ y2k38_time_t y2k38_clock_get_kernel_offset(void);
 #define Y2K38_OFFSET_ENV            "Y2K38_KERNEL_OFFSET_FILE"
 
 /*
+ * SIGHUP subscriber list managed by daemon_y2k38_check (and library).
+ * Each line: <process_name> <pid>
+ * Used so offsetctl / check-daemon can notify all y2k38 processes.
+ */
+#define Y2K38_SIGHUP_LIST_PATH_DEFAULT  "/var/run/y2k38_sighup.list"
+#define Y2K38_SIGHUP_LIST_ENV           "Y2K38_SIGHUP_LIST_FILE"
+#define Y2K38_SIGHUP_LIST_NAME_MAX      64
+
+/*
  * Raw kernel seconds widened to 64-bit WITHOUT applying g_kernel_offset.
  * Useful when computing a new offset from a trusted UTC source.
  */
@@ -97,6 +106,67 @@ int y2k38_clock_set_system_utc(y2k38_time_t true_utc);
 int y2k38_clock_set_system_and_offset(y2k38_time_t true_utc,
                                       const char *path_or_null);
 
+/* ---- process session / SIGHUP list ------------------------------------ */
+
+/*
+ * Process-local flag: 1 when /etc/y2k38_offset has been applied in this
+ * process (after session_init / ensure). y2k38_time() calls ensure() first.
+ */
+int y2k38_session_is_ready(void);
+
+/*
+ * If offset not yet applied (flag==0):
+ *   - register SIGHUP handler (reload OFFSET)
+ *   - add <proc_name,pid> to SIGHUP list
+ *   - load /etc/y2k38_offset and set flag
+ *   - enable auto-wrap (detect wrap on each y2k38_time())
+ * If already ready: no-op, returns 0.
+ *
+ * proc_name: short name for the list (e.g. "daemon_a"); NULL → "y2k38_app".
+ * Called automatically from y2k38_time() / y2k38_gettimeofday().
+ */
+int y2k38_session_ensure(const char *proc_name);
+
+/* Explicit init (same as ensure). Preferred at main() start. */
+int y2k38_session_init(const char *proc_name);
+
+/*
+ * On process exit:
+ *   - unregister SIGHUP handler
+ *   - remove this pid from SIGHUP list
+ *   - clear ready flag
+ * Also registered via atexit() from session_init/ensure.
+ */
+void y2k38_session_exit(void);
+
+/*
+ * Optional: called (outside the signal handler) after a peer SIGHUP caused
+ * /etc/y2k38_offset to be reloaded. Safe to printf / notify from here.
+ */
+typedef void (*y2k38_sighup_callback_fn)(y2k38_time_t new_offset, void *userdata);
+void y2k38_session_on_sighup_callback(y2k38_sighup_callback_fn fn, void *userdata);
+
+/*
+ * Drain pending SIGHUP: reload OFFSET and invoke sighup callback.
+ * Returns 1 if a SIGHUP was processed, 0 otherwise.
+ * Also invoked automatically from y2k38_session_ensure() / y2k38_time().
+ */
+int y2k38_session_poll_sighup(void);
+
+const char *y2k38_sighup_list_resolve_path(const char *path_or_null);
+int y2k38_sighup_list_add(const char *proc_name, long pid);
+int y2k38_sighup_list_remove(long pid);
+
+/*
+ * Send SIGHUP to every pid in the list except exclude_pid.
+ * Pass getpid() so the sender (check daemon / offsetctl) is not notified.
+ * Returns number of signals sent (>=0), or -1 on I/O error.
+ */
+int y2k38_sighup_list_notify(long exclude_pid);
+
+/* Seconds remaining until signed 32-bit wrap (kernel raw). For adaptive poll. */
+y2k38_time_t y2k38_clock_seconds_until_wrap(void);
+
 /*
  * Automatic wrap recovery for long-running daemons (started pre-2038, runs past).
  *
@@ -107,6 +177,7 @@ int y2k38_clock_set_system_and_offset(y2k38_time_t true_utc,
  * Pass Y2K38_OFFSET_PATH_DEFAULT or NULL to skip persistence.
  *
  * Also call y2k38_clock_on_wrap_callback() to log/notify your daemon.
+ * session_ensure() enables auto-wrap with /etc/y2k38_offset by default.
  */
 void y2k38_clock_set_auto_wrap(int enabled, const char *persist_path);
 int y2k38_clock_get_auto_wrap(void);
