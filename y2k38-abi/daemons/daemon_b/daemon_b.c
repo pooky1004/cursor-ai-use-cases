@@ -1,18 +1,17 @@
 /*
  * Daemon B — three-thread Y2K38 time demo (mirrors Daemon A layout).
  *
- * Thread 1: every 2s print now, start, and (now - start).
- * Thread 2: random-second sleep; print enter/wake/diff; pause 1..5s; repeat.
- * Thread 3: nanosecond-scale work; print progress every 3s.
+ * Thread activity prints are gated by --debug / -d.
+ * WRAP and peer SIGHUP messages are always printed.
  *
- * Optionally still recomputes DELTA lines from Daemon A event log in thread 1
+ * Optionally recomputes DELTA lines from Daemon A event log in thread 1
  * when event_log + delta_out are given.
  *
- * Stop: clear g_run on SIGINT/SIGTERM (kill -TERM). kill -9 cannot be caught.
+ * Stop: clear g_run on SIGINT/SIGTERM (kill -TERM).
  *
  * Usage:
  *   daemon_b [event_log delta_out] [--offset-file PATH|--no-offset-file]
- *            [--mock-now EPOCH] [--mock-kernel SEC]
+ *            [--mock-now EPOCH] [--mock-kernel SEC] [--debug|-d]
  */
 #define _DEFAULT_SOURCE
 #define _POSIX_C_SOURCE 200809L
@@ -24,6 +23,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -31,11 +31,33 @@
 #include <y2k38/time.h>
 
 static volatile sig_atomic_t g_run = 1;
+static int g_debug;
 static const char *g_event_path;
 static const char *g_delta_path;
 static pthread_mutex_t g_delta_mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t g_notify_mu = PTHREAD_MUTEX_INITIALIZER;
 static unsigned g_last_notified_wrap;
+
+#define DBG(...) \
+    do { if (g_debug) fprintf(stdout, __VA_ARGS__); } while (0)
+
+/* ELDK 3.1.1 may not define CLOCK_MONOTONIC — fall back to gettimeofday. */
+static int mono_gettime(struct timespec *ts)
+{
+#if defined(CLOCK_MONOTONIC)
+    if (clock_gettime(CLOCK_MONOTONIC, ts) == 0)
+        return 0;
+#endif
+    {
+        struct timeval tv;
+
+        if (gettimeofday(&tv, NULL) != 0)
+            return -1;
+        ts->tv_sec = (time_t)tv.tv_sec;
+        ts->tv_nsec = (long)tv.tv_usec * 1000L;
+        return 0;
+    }
+}
 
 static void on_signal(int sig)
 {
@@ -87,9 +109,11 @@ static void thread_service_clock(const char *tag)
 static void usage(const char *argv0)
 {
     fprintf(stderr,
-            "Usage: %s [event_log delta_out] [--offset-file PATH|--no-offset-file] "
-            "[--mock-now EPOCH] [--mock-kernel SEC]\n"
+            "Usage: %s [event_log delta_out] "
+            "[--offset-file PATH|--no-offset-file] "
+            "[--mock-now EPOCH] [--mock-kernel SEC] [--debug|-d]\n"
             "  3 threads: ticker(2s), random-sleep, nanos-work(3s report)\n"
+            "  --debug: thread status prints; WRAP/SIGHUP always printed\n"
             "  Stop with: kill -TERM <pid>  (or Ctrl-C)\n",
             argv0);
 }
@@ -107,7 +131,8 @@ static int apply_startup_offset(const char *offset_file, int no_offset)
     y2k38_clock_on_wrap_callback(on_local_wrap, NULL);
     y2k38_session_on_sighup_callback(on_peer_sighup, NULL);
     y2k38_clock_set_auto_wrap(1, y2k38_clock_resolve_offset_path(NULL));
-    fprintf(stderr, "daemon_b: session ready offset=%lld (wrap→SIGHUP, peer SIGHUP ok)\n",
+    fprintf(stderr,
+            "daemon_b: session ready offset=%lld (wrap→SIGHUP, peer SIGHUP ok)\n",
             (long long)y2k38_clock_get_kernel_offset());
     return 0;
 }
@@ -116,6 +141,8 @@ static void print_times(const char *tag, y2k38_time_t t0, y2k38_time_t t1)
 {
     char s0[64], s1[64];
 
+    if (!g_debug)
+        return;
     y2k38_format_datetime_ctl(t0, s0, sizeof(s0));
     y2k38_format_datetime_ctl(t1, s1, sizeof(s1));
     printf("[%s] start=%s  now=%s  delta=%lld s\n",
@@ -187,8 +214,10 @@ static void recomputedeltas_once(void)
     fclose(in);
     fclose(out);
     pthread_mutex_unlock(&g_delta_mu);
-    printf("[B-T1] recomputed %d deltas -> %s\n", count, g_delta_path);
-    fflush(stdout);
+    if (g_debug) {
+        printf("[B-T1] recomputed %d deltas -> %s\n", count, g_delta_path);
+        fflush(stdout);
+    }
 }
 
 static void *thread_ticker(void *arg)
@@ -196,8 +225,9 @@ static void *thread_ticker(void *arg)
     y2k38_time_t start = y2k38_time(NULL);
 
     (void)arg;
-    printf("[B-T1] start captured: %lld\n", (long long)start);
-    fflush(stdout);
+    DBG("[B-T1] start captured: %lld\n", (long long)start);
+    if (g_debug)
+        fflush(stdout);
 
     while (g_run) {
         y2k38_time_t now;
@@ -229,9 +259,11 @@ static void *thread_sleeper(void *arg)
         sleep_sec = (rand() % 10) + 1;
         thread_service_clock("B-T2");
         enter = y2k38_time(NULL);
-        y2k38_format_datetime_ctl(enter, ebuf, sizeof(ebuf));
-        printf("[B-T2] sleep_enter=%s  sleep_sec=%d\n", ebuf, sleep_sec);
-        fflush(stdout);
+        if (g_debug) {
+            y2k38_format_datetime_ctl(enter, ebuf, sizeof(ebuf));
+            printf("[B-T2] sleep_enter=%s  sleep_sec=%d\n", ebuf, sleep_sec);
+            fflush(stdout);
+        }
 
         sleep_interruptible((y2k38_time_t)sleep_sec);
         if (!g_run)
@@ -239,16 +271,20 @@ static void *thread_sleeper(void *arg)
 
         wake = y2k38_time(NULL);
         thread_service_clock("B-T2");
-        y2k38_format_datetime_ctl(wake, wbuf, sizeof(wbuf));
-        printf("[B-T2] sleep_wake=%s  enter=%s  delta=%lld s (wanted %d)\n",
-               wbuf, ebuf,
-               (long long)y2k38_difftime_sec(wake, enter),
-               sleep_sec);
-        fflush(stdout);
+        if (g_debug) {
+            y2k38_format_datetime_ctl(wake, wbuf, sizeof(wbuf));
+            y2k38_format_datetime_ctl(enter, ebuf, sizeof(ebuf));
+            printf("[B-T2] sleep_wake=%s  enter=%s  delta=%lld s (wanted %d)\n",
+                   wbuf, ebuf,
+                   (long long)y2k38_difftime_sec(wake, enter),
+                   sleep_sec);
+            fflush(stdout);
+        }
 
         pause_sec = (rand() % 5) + 1;
-        printf("[B-T2] pause %d s before next cycle\n", pause_sec);
-        fflush(stdout);
+        DBG("[B-T2] pause %d s before next cycle\n", pause_sec);
+        if (g_debug)
+            fflush(stdout);
         sleep_interruptible((y2k38_time_t)pause_sec);
     }
     return NULL;
@@ -263,15 +299,19 @@ static void *thread_nanos(void *arg)
 
     (void)arg;
     last_report = y2k38_time(NULL);
-    printf("[B-T3] nanosecond worker started\n");
-    fflush(stdout);
+    DBG("[B-T3] nanosecond worker started\n");
+    if (g_debug)
+        fflush(stdout);
 
     while (g_run) {
-        clock_gettime(CLOCK_MONOTONIC, &ts0);
+        if (mono_gettime(&ts0) != 0)
+            break;
         for (;;) {
             long long elapsed_ns;
+
             iterations++;
-            clock_gettime(CLOCK_MONOTONIC, &ts1);
+            if (mono_gettime(&ts1) != 0)
+                break;
             elapsed_ns = (long long)(ts1.tv_sec - ts0.tv_sec) * 1000000000LL
                          + (long long)(ts1.tv_nsec - ts0.tv_nsec);
             if (elapsed_ns >= 100000LL) {
@@ -285,7 +325,7 @@ static void *thread_nanos(void *arg)
 
         {
             y2k38_time_t now = y2k38_time(NULL);
-            if (y2k38_difftime_sec(now, last_report) >= 3) {
+            if (g_debug && y2k38_difftime_sec(now, last_report) >= 3) {
                 printf("[B-T3] report: iterations=%llu  measured_ns=%llu  "
                        "avg_ns_per_quantum=%llu  utc_epoch=%lld\n",
                        (unsigned long long)iterations,
@@ -318,6 +358,9 @@ int main(int argc, char **argv)
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--no-offset-file") == 0) {
             no_offset = 1;
+        } else if (strcmp(argv[i], "--debug") == 0 ||
+                   strcmp(argv[i], "-d") == 0) {
+            g_debug = 1;
         } else if (strcmp(argv[i], "--offset-file") == 0 && i + 1 < argc) {
             offset_file = argv[++i];
         } else if (strcmp(argv[i], "--mock-now") == 0 && i + 1 < argc) {
@@ -366,11 +409,12 @@ int main(int argc, char **argv)
     g_delta_path = out_path;
 
     fprintf(stderr,
-            "daemon_b: pid=%ld threads=3 events=%s deltas=%s\n"
+            "daemon_b: pid=%ld threads=3 events=%s deltas=%s debug=%d\n"
             "  stop with: kill -TERM %ld   (kill -9 cannot use g_run flag)\n",
             (long)getpid(),
             event_path ? event_path : "(none)",
             out_path ? out_path : "(none)",
+            g_debug,
             (long)getpid());
 
     if (pthread_create(&th[0], NULL, thread_ticker, NULL) != 0 ||

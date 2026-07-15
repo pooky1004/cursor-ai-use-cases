@@ -280,13 +280,18 @@ y2k38_time_t y2k38_time_kernel_raw(y2k38_time_t *tloc)
 y2k38_time_t y2k38_clock_seconds_until_wrap(void)
 {
     y2k38_time_t raw;
+    int32_t r32;
 
+    /*
+     * Kernel counter is always a signed 32-bit residual. After wrap it becomes
+     * negative and counts -2^31 .. 2^31-1 until the next overflow.
+     * Do NOT treat raw < 0 as "rem=0" — that pinned the check daemon at 1s.
+     */
     raw = y2k38_time_kernel_raw(NULL);
-    if (raw < 0)
-        return 0; /* already past signed wrap region */
-    if (raw >= Y2K38_TIME_T32_MAX)
+    r32 = (int32_t)raw;
+    if (r32 >= (int32_t)Y2K38_TIME_T32_MAX)
         return 0;
-    return Y2K38_TIME_T32_MAX - raw;
+    return (y2k38_time_t)Y2K38_TIME_T32_MAX - (y2k38_time_t)r32;
 }
 
 y2k38_time_t y2k38_time(y2k38_time_t *tloc)

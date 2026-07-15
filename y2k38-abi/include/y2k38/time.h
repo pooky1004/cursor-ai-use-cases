@@ -164,7 +164,13 @@ int y2k38_sighup_list_remove(long pid);
  */
 int y2k38_sighup_list_notify(long exclude_pid);
 
-/* Seconds remaining until signed 32-bit wrap (kernel raw). For adaptive poll. */
+/*
+ * Seconds remaining until the next signed 32-bit kernel wrap.
+ * Works both before the first wrap (raw >= 0) and after wrap (raw < 0):
+ *   rem = INT32_MAX - (int32_t)raw
+ * Right after wrap (raw == INT32_MIN) rem ≈ 2^32 - 1 (~68 years).
+ * Used by daemon_y2k38_check adaptive poll (clamp to 1..60 s).
+ */
 y2k38_time_t y2k38_clock_seconds_until_wrap(void);
 
 /*
